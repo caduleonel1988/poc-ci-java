@@ -26,6 +26,13 @@ dependencies {
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+sonar {
+  properties {
+    property "sonar.projectKey", "caduleonel1988_poc-ci-java"
+    property "sonar.organization", "caduleonelorg"
+  }
+}
+
 jacocoTestReport {
     dependsOn test
 
