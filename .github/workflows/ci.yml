@@ -53,7 +53,7 @@ jobs:
         with:
           args: >
             -Dsonar.projectKey=caduleonel1988_poc-ci-java
-            -Dsonar.organization=caduleonel1988
+            -Dsonar.organization=caduleonelorg
             -Dsonar.host.url=https://sonarcloud.io
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
