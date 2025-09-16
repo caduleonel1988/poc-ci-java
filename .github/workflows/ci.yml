@@ -57,10 +57,9 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          PROJECT_KEY="caduleonel1988_poc-ci-java"   # ensure this matches build.gradle
+          PROJECT_KEY="caduleonel1988_poc-ci-java"
           echo "Waiting for SonarCloud Quality Gate for $PROJECT_KEY"
 
-          # Determine branch name: head ref (PR) or branch from GITHUB_REF
           if [ -n "$GITHUB_HEAD_REF" ]; then
             BRANCH="$GITHUB_HEAD_REF"
           else
@@ -68,48 +67,57 @@ jobs:
           fi
           echo "Detected branch: $BRANCH"
 
-          max_attempts=30
-          attempt=1
-
-          while [ $attempt -le $max_attempts ]; do
-            echo "Attempt $attempt/$max_attempts..."
-
-            # Try to find the most recent analysis for this branch
+          get_status() {
             analyses_resp=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/project_analyses/search?project=${PROJECT_KEY}&branch=${BRANCH}&ps=1")
             echo "analyses response: $analyses_resp"
             ANALYSIS_ID=$(echo "$analyses_resp" | jq -r '.analyses[0].key // .analyses[0].id // empty')
-
             if [ -n "$ANALYSIS_ID" ]; then
               echo "Found analysis id for branch $BRANCH: $ANALYSIS_ID"
-              resp=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${ANALYSIS_ID}")
+              curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${ANALYSIS_ID}"
             else
               echo "No analysis found for branch $BRANCH, falling back to projectKey query"
-              resp=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${PROJECT_KEY}")
+              curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${PROJECT_KEY}"
             fi
+          }
 
-            echo "project_status response: $resp"
-            status=$(echo "$resp" | jq -r '.projectStatus.status // empty')
+          # initial check
+          resp=$(get_status)
+          echo "project_status response: $resp"
+          status=$(echo "$resp" | jq -r '.projectStatus.status // empty')
 
-            # Treat empty or NONE as 'not ready' and keep polling
-            if [ -z "$status" ] || [ "$status" = "NONE" ]; then
-              echo "Quality Gate not ready yet (status: ${status:-empty}). Sleeping 10s..."
-              sleep 10
-              attempt=$((attempt + 1))
-              continue
-            fi
+          # if still empty/NONE, run second analysis and re-check a few times
+          if [ -z "$status" ] || [ "$status" = "NONE" ]; then
+            echo "Quality Gate not computed yet (status: ${status:-empty}). Running a second analysis to force computation..."
+            ./gradlew sonarqube -Dsonar.login=${SONAR_TOKEN} -Dsonar.host.url=https://sonarcloud.io --info || true
+            sleep 5
+            retries=6
+            i=1
+            while [ $i -le $retries ]; do
+              echo "Re-check attempt $i/$retries..."
+              resp=$(get_status)
+              echo "project_status response: $resp"
+              status=$(echo "$resp" | jq -r '.projectStatus.status // empty')
+              if [ -n "$status" ] && [ "$status" != "NONE" ]; then
+                break
+              fi
+              sleep 5
+              i=$((i + 1))
+            done
+          fi
 
-            echo "SonarCloud Quality Gate status: $status"
-            if [ "$status" = "OK" ]; then
-              echo "Quality Gate passed."
-              exit 0
-            else
-              echo "::error ::SonarCloud Quality Gate is $status"
-              exit 1
-            fi
-          done
+          if [ -z "$status" ] || [ "$status" = "NONE" ]; then
+            echo "::error ::Timed out or gate still not computed (status: ${status:-empty})."
+            exit 1
+          fi
 
-          echo "::error ::Timed out waiting for SonarCloud Quality Gate (projectKey=${PROJECT_KEY}, branch=${BRANCH})"
-          exit 1
+          echo "SonarCloud Quality Gate status: $status"
+          if [ "$status" = "OK" ]; then
+            echo "Quality Gate passed."
+            exit 0
+          else
+            echo "::error ::SonarCloud Quality Gate is $status"
+            exit 1
+          fi
 
   check-app:
     name: check-app
