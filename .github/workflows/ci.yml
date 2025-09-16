@@ -49,9 +49,21 @@ jobs:
       - name: Build and analyze
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          PR_BRANCH: ${{ github.head_ref || '' }}
+          PR_BASE: ${{ github.base_ref || '' }}
         run: |
-          # Build and publish analysis to SonarCloud
-          ./gradlew build sonarqube -Dsonar.login=${SONAR_TOKEN} -Dsonar.host.url=https://sonarcloud.io --info
+          # Build and publish analysis to SonarCloud.
+          # If this is a pull_request, provide sonar.pullrequest.* properties so SonarCloud creates a PR analysis.
+          EXTRA_ARGS="-Dsonar.login=${SONAR_TOKEN} -Dsonar.host.url=https://sonarcloud.io"
+          if [ -n "${PR_NUMBER}" ]; then
+            echo "Detected Pull Request #${PR_NUMBER} (branch=${PR_BRANCH}, base=${PR_BASE}) - publishing PR analysis"
+            EXTRA_ARGS="$EXTRA_ARGS -Dsonar.pullrequest.key=${PR_NUMBER} -Dsonar.pullrequest.branch=${PR_BRANCH} -Dsonar.pullrequest.base=${PR_BASE}"
+          else
+            echo "No PR detected - publishing branch analysis"
+          fi
+
+          ./gradlew build sonarqube $EXTRA_ARGS --info
 
       - name: Wait for SonarCloud Quality Gate
         env:
