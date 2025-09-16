@@ -30,17 +30,21 @@ sonar {
   properties {
     property "sonar.projectKey", "caduleonel1988_poc-ci-java"
     property "sonar.organization", "caduleonelorg"
+	// Exclude the application entrypoint from coverage and from analysis if desired
+	property "sonar.coverage.exclusions", "**/PoCCiApplication.java"
+	property "sonar.exclusions", "**/PoCCiApplication.java"
+	// Ensure JaCoCo XML report path is visible to Sonar when Gradle sonarqube runs locally
+	property "sonar.coverage.jacoco.xmlReportPaths", "build/reports/jacoco/test/jacocoTestReport.xml"
   }
 }
 
 jacocoTestReport {
     dependsOn test
-
-    reports {
-        xml.required = true
-        html.required = true
-        csv.required = false
-    }
+	reports {
+		xml.required = true
+		html.required = true
+		csv.required = false
+	}
 }
 
 tasks.named('test') {
