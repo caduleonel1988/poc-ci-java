@@ -1,18 +1,7 @@
-name: ci-poc-java-workflow
-
-on: 
-  pull_request:
-    branches:
-      - develop
-
 jobs:
   matrix-check:
-    # name: Test with Java ${ {matrix.java } }
     name: Test with Java 17
     runs-on: ubuntu-latest
-    # strategy:
-    #   matrix:
-    #     java: ["8.0.462+8", "17.0.16+8"]
     steps:          
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -29,9 +18,6 @@ jobs:
       - name: Run tests
         run: ./gradlew test jacocoTestReport
 
-      # - name: Run app
-      #   run: ./gradlew bootRun
-
       - name: Cache SonarQube packages
         uses: actions/cache@v4
         with:
@@ -46,134 +32,15 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
           restore-keys: ${{ runner.os }}-gradle
 
-      - name: Build and analyze
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
-          PR_BRANCH: ${{ github.head_ref || '' }}
-          PR_BASE: ${{ github.base_ref || '' }}
-        run: |
-          # Build and publish analysis to SonarCloud.
-          # If this is a pull_request, provide sonar.pullrequest.* properties so SonarCloud creates a PR analysis.
-          EXTRA_ARGS="-Dsonar.login=${SONAR_TOKEN} -Dsonar.host.url=https://sonarcloud.io"
-          if [ -n "${PR_NUMBER}" ]; then
-            echo "Detected Pull Request #${PR_NUMBER} (branch=${PR_BRANCH}, base=${PR_BASE}) - publishing PR analysis"
-            EXTRA_ARGS="$EXTRA_ARGS -Dsonar.pullrequest.key=${PR_NUMBER} -Dsonar.pullrequest.branch=${PR_BRANCH} -Dsonar.pullrequest.base=${PR_BASE}"
-          else
-            echo "No PR detected - publishing branch analysis"
-          fi
-
-          ./gradlew build sonarqube $EXTRA_ARGS --info
-
-      - name: Wait for SonarCloud Quality Gate
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          PROJECT_KEY="caduleonel1988_poc-ci-java"
-          echo "Waiting for SonarCloud Quality Gate for $PROJECT_KEY"
-
-          # determine branch name
-          if [ -n "$GITHUB_HEAD_REF" ]; then
-            BRANCH="$GITHUB_HEAD_REF"
-          else
-            BRANCH="${GITHUB_REF#refs/heads/}"
-          fi
-          echo "Detected branch: $BRANCH"
-
-          # try to extract PR number from event payload (if present)
-          PR_NUMBER=""
-          if [ -n "$GITHUB_EVENT_PATH" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
-            PR_NUMBER=$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
-          fi
-
-          get_status() {
-            # fetch recent analyses (no branch filter) and try to match by branch or PR
-            analyses=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/project_analyses/search?project=${PROJECT_KEY}&ps=50")
-
-            ANALYSIS_ID=$(echo "$analyses" | jq -r --arg BR "$BRANCH" --arg PR "$PR_NUMBER" '
-              ( .analyses[] | select(.branch == $BR) | .key ) //
-              ( .analyses[] | select(.pullRequest != null and ((.pullRequest.number|tostring) == $PR or (.pullRequest.key|tostring) == $PR)) | .key ) // empty
-            ')
-
-            if [ -n "$ANALYSIS_ID" ]; then
-              echo "Found analysis id for branch/PR: $ANALYSIS_ID" >&2
-              # return project_status JSON only
-              curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${ANALYSIS_ID}"
-            else
-              echo "No analysis found for branch/PR, falling back to projectKey query" >&2
-              curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${PROJECT_KEY}"
-            fi
-          }
-
-          # initial check
-          resp=$(get_status)
-          # print JSON only (no debug prefix) so jq can parse it
-          echo "$resp" | jq '.' || true
-          status=$(echo "$resp" | jq -r '.projectStatus.status // empty')
-
-          # if still empty/NONE, run second analysis and re-check a few times
-          if [ -z "$status" ] || [ "$status" = "NONE" ]; then
-            echo "Quality Gate not computed yet (status: ${status:-empty}). Running a second analysis to force computation..."
-            ./gradlew sonarqube -Dsonar.login=${SONAR_TOKEN} -Dsonar.host.url=https://sonarcloud.io --info || true
-            sleep 5
-            retries=6
-            i=1
-            while [ $i -le $retries ]; do
-              echo "Re-check attempt $i/$retries..."
-              resp=$(get_status)
-              echo "$resp" | jq '.' || true
-              status=$(echo "$resp" | jq -r '.projectStatus.status // empty')
-              if [ -n "$status" ] && [ "$status" != "NONE" ]; then
-                break
-              fi
-              sleep 5
-              i=$((i + 1))
-            done
-          fi
-
-          if [ -z "$status" ] || [ "$status" = "NONE" ]; then
-            echo "::error ::Timed out or gate still not computed (status: ${status:-empty})."
-            exit 1
-          fi
-
-          echo "SonarCloud Quality Gate status: $status"
-          if [ "$status" = "OK" ]; then
-            echo "Quality Gate passed."
-            exit 0
-          else
-            echo "::error ::SonarCloud Quality Gate is $status"
-            exit 1
-          fi
-
-  check-app:
-    name: check-app
-    runs-on: ubuntu-latest
-    needs: matrix-check
-    steps:
-      - name: Validate matrix results
-        run: |
-          echo "All matrix checks passed. Final check complete."
-
-  build-image:
-    name: build-image
-    runs-on: ubuntu-latest
-    needs: check-app
-    steps:      
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Docker Login
-        uses: docker/login-action@v2
+      - name: Build and analyze with SonarCloud
+        uses: sonarsource/sonarcloud-github-action@v2
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }} 
-
-      - name: Build Docker image
-        id: docker_build
-        uses: docker/build-push-action@v3
-        with:
-          push: true
-          tags: fadsfdsfdsf/ci-java-math-app:latest
+          args: >
+            -Dsonar.projectKey=caduleonel1988_poc-ci-java
+            -Dsonar.organization=caduleonel1988
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
+            -Dsonar.pullrequest.branch=${{ github.head_ref }}
+            -Dsonar.pullrequest.base=${{ github.base_ref }}
+            -Dsonar.qualitygate.wait=true
