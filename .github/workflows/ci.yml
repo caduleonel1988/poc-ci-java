@@ -55,31 +55,33 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          # Set this to the Sonar project key from build.gradle
-          PROJECT_KEY="caduleonel1988_poc-ci-java"
+          PROJECT_KEY="caduleonel1988_poc-ci-java"   # ensure this matches build.gradle
+          echo "Waiting for SonarCloud Quality Gate for $PROJECT_KEY"
 
-          echo "Waiting for SonarCloud Quality Gate for $PROJECT_KEY..."
+          max_attempts=30
+          attempt=1
 
-          # poll up to 18 times (≈3 minutes) waiting for analysis to finish
-          for attempt in $(seq 1 18); do
-            # request the project_status and extract the status (OK / ERROR / WARN / empty)
-            status=$(curl -s -u "${SONAR_TOKEN}:" \
-              "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${PROJECT_KEY}" \
-              | jq -r '.projectStatus.status // empty')
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt/$max_attempts..."
+            resp=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${PROJECT_KEY}")
+            status=$(echo "$resp" | jq -r '.projectStatus.status // empty')
 
-            if [ -n "$status" ]; then
-              echo "SonarCloud Quality Gate status: $status"
-              if [ "$status" = "OK" ]; then
-                echo "Quality Gate passed."
-                exit 0
-              else
-                echo "::error ::SonarCloud Quality Gate is $status"
-                exit 1
-              fi
+            # Treat empty or NONE as 'not ready' and keep polling
+            if [ -z "$status" ] || [ "$status" = "NONE" ]; then
+              echo "Quality Gate not ready yet (status: ${status:-empty}). Sleeping 10s..."
+              sleep 10
+              attempt=$((attempt + 1))
+              continue
             fi
 
-            echo "Quality Gate not ready yet (attempt $attempt). Sleeping 10s..."
-            sleep 10
+            echo "SonarCloud Quality Gate status: $status"
+            if [ "$status" = "OK" ]; then
+              echo "Quality Gate passed."
+              exit 0
+            else
+              echo "::error ::SonarCloud Quality Gate is $status"
+              exit 1
+            fi
           done
 
           echo "::error ::Timed out waiting for SonarCloud Quality Gate (projectKey=${PROJECT_KEY})"
