@@ -72,6 +72,7 @@ jobs:
           PROJECT_KEY="caduleonel1988_poc-ci-java"
           echo "Waiting for SonarCloud Quality Gate for $PROJECT_KEY"
 
+          # determine branch name
           if [ -n "$GITHUB_HEAD_REF" ]; then
             BRANCH="$GITHUB_HEAD_REF"
           else
@@ -79,22 +80,35 @@ jobs:
           fi
           echo "Detected branch: $BRANCH"
 
+          # try to extract PR number from event payload (if present)
+          PR_NUMBER=""
+          if [ -n "$GITHUB_EVENT_PATH" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
+            PR_NUMBER=$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+          fi
+
           get_status() {
-            analyses_resp=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/project_analyses/search?project=${PROJECT_KEY}&branch=${BRANCH}&ps=1")
-            echo "analyses response: $analyses_resp"
-            ANALYSIS_ID=$(echo "$analyses_resp" | jq -r '.analyses[0].key // .analyses[0].id // empty')
+            # fetch recent analyses (no branch filter) and try to match by branch or PR
+            analyses=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/project_analyses/search?project=${PROJECT_KEY}&ps=50")
+
+            ANALYSIS_ID=$(echo "$analyses" | jq -r --arg BR "$BRANCH" --arg PR "$PR_NUMBER" '
+              ( .analyses[] | select(.branch == $BR) | .key ) //
+              ( .analyses[] | select(.pullRequest != null and ((.pullRequest.number|tostring) == $PR or (.pullRequest.key|tostring) == $PR)) | .key ) // empty
+            ')
+
             if [ -n "$ANALYSIS_ID" ]; then
-              echo "Found analysis id for branch $BRANCH: $ANALYSIS_ID"
+              echo "Found analysis id for branch/PR: $ANALYSIS_ID"
+              # return project_status JSON only
               curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${ANALYSIS_ID}"
             else
-              echo "No analysis found for branch $BRANCH, falling back to projectKey query"
+              echo "No analysis found for branch/PR, falling back to projectKey query"
               curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${PROJECT_KEY}"
             fi
           }
 
           # initial check
           resp=$(get_status)
-          echo "project_status response: $resp"
+          # print JSON only (no debug prefix) so jq can parse it
+          echo "$resp" | jq '.' || true
           status=$(echo "$resp" | jq -r '.projectStatus.status // empty')
 
           # if still empty/NONE, run second analysis and re-check a few times
@@ -107,7 +121,7 @@ jobs:
             while [ $i -le $retries ]; do
               echo "Re-check attempt $i/$retries..."
               resp=$(get_status)
-              echo "project_status response: $resp"
+              echo "$resp" | jq '.' || true
               status=$(echo "$resp" | jq -r '.projectStatus.status // empty')
               if [ -n "$status" ] && [ "$status" != "NONE" ]; then
                 break
