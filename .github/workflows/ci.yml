@@ -51,6 +51,22 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: ./gradlew build sonar --info
 
+      - name: Check SonarCloud Quality Gate
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          # replace with your actual Sonar project key shown in SonarCloud (e.g. caduleonel_poc-ci-java)
+          PROJECT_KEY="caduleonel_poc-ci-java"
+          
+          echo "Querying SonarCloud project_status for $PROJECT_KEY"
+          status=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${PROJECT_KEY}" | jq -r .projectStatus.status)
+          
+          echo "SonarCloud Quality Gate status: $status"
+          if [ "$status" != "OK" ]; then
+            echo "::error ::SonarCloud Quality Gate is $status"
+            exit 1
+          fi
+
   check-app:
     name: check-app
     runs-on: ubuntu-latest
