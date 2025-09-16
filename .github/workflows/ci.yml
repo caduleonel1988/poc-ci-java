@@ -96,11 +96,11 @@ jobs:
             ')
 
             if [ -n "$ANALYSIS_ID" ]; then
-              echo "Found analysis id for branch/PR: $ANALYSIS_ID"
+              echo "Found analysis id for branch/PR: $ANALYSIS_ID" >&2
               # return project_status JSON only
               curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${ANALYSIS_ID}"
             else
-              echo "No analysis found for branch/PR, falling back to projectKey query"
+              echo "No analysis found for branch/PR, falling back to projectKey query" >&2
               curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${PROJECT_KEY}"
             fi
           }
