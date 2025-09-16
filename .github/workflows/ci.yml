@@ -49,7 +49,9 @@ jobs:
       - name: Build and analyze
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: ./gradlew build sonar --info
+        run: |
+          # Build and publish analysis to SonarCloud
+          ./gradlew build sonarqube -Dsonar.login=${SONAR_TOKEN} -Dsonar.host.url=https://sonarcloud.io --info
 
       - name: Wait for SonarCloud Quality Gate
         env:
@@ -58,12 +60,34 @@ jobs:
           PROJECT_KEY="caduleonel1988_poc-ci-java"   # ensure this matches build.gradle
           echo "Waiting for SonarCloud Quality Gate for $PROJECT_KEY"
 
+          # Determine branch name: head ref (PR) or branch from GITHUB_REF
+          if [ -n "$GITHUB_HEAD_REF" ]; then
+            BRANCH="$GITHUB_HEAD_REF"
+          else
+            BRANCH="${GITHUB_REF#refs/heads/}"
+          fi
+          echo "Detected branch: $BRANCH"
+
           max_attempts=30
           attempt=1
 
           while [ $attempt -le $max_attempts ]; do
             echo "Attempt $attempt/$max_attempts..."
-            resp=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${PROJECT_KEY}")
+
+            # Try to find the most recent analysis for this branch
+            analyses_resp=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/project_analyses/search?project=${PROJECT_KEY}&branch=${BRANCH}&ps=1")
+            echo "analyses response: $analyses_resp"
+            ANALYSIS_ID=$(echo "$analyses_resp" | jq -r '.analyses[0].key // .analyses[0].id // empty')
+
+            if [ -n "$ANALYSIS_ID" ]; then
+              echo "Found analysis id for branch $BRANCH: $ANALYSIS_ID"
+              resp=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?analysisId=${ANALYSIS_ID}")
+            else
+              echo "No analysis found for branch $BRANCH, falling back to projectKey query"
+              resp=$(curl -s -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${PROJECT_KEY}")
+            fi
+
+            echo "project_status response: $resp"
             status=$(echo "$resp" | jq -r '.projectStatus.status // empty')
 
             # Treat empty or NONE as 'not ready' and keep polling
@@ -84,7 +108,7 @@ jobs:
             fi
           done
 
-          echo "::error ::Timed out waiting for SonarCloud Quality Gate (projectKey=${PROJECT_KEY})"
+          echo "::error ::Timed out waiting for SonarCloud Quality Gate (projectKey=${PROJECT_KEY}, branch=${BRANCH})"
           exit 1
 
   check-app:
